@@ -99,6 +99,15 @@ public class BillServiceImpl extends BaseEntityDataServiceImpl<Bill> implements 
 	
 	@Override
 	protected void validate(Bill bill) {
+		// Use OpenMRS HandlerUtil to discover and run validators with @Handler annotation
+		// This will automatically discover and run BillValidator
+		org.springframework.validation.Errors errors = new org.springframework.validation.BindException(bill, "bill");
+		org.openmrs.util.HandlerUtil.getHandlersForType(org.springframework.validation.Validator.class, Bill.class)
+		        .forEach(validator -> validator.validate(bill, errors));
+		
+		if (errors.hasErrors()) {
+			throw new org.openmrs.api.ValidationException(errors);
+		}
 	}
 	
 	/**

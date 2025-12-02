@@ -22,6 +22,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.apache.commons.lang3.StringUtils;
+import org.openmrs.api.db.hibernate.DbSession;
+import org.openmrs.api.db.hibernate.DbSessionFactory;
 import org.openmrs.Patient;
 import org.openmrs.Provider;
 import org.openmrs.User;
@@ -90,13 +92,53 @@ public class BillResource extends BaseRestDataResource<Bill> {
 
     @PropertySetter("lineItems")
     public void setBillLineItems(Bill instance, List<BillLineItem> lineItems) {
-        if (!instance.isPending()) {
-            throw new IllegalStateException(
-                    "Line items can only be modified when the bill is in PENDING state. Current status: "
-                            + instance.getStatus());
+        // For existing bills (not new), compare incoming line items with original database state
+        // Clear cache and fetch fresh to get unmodified bill from database
+        if (instance.getId() != null && !instance.isPending()) {
+            // Get DbSessionFactory using the correct bean name
+            DbSessionFactory sessionFactory = Context.getRegisteredComponent("dbSessionFactory", DbSessionFactory.class);
+            
+            if (sessionFactory != null) {
+                DbSession session = sessionFactory.getCurrentSession();
+                
+                // Evict the instance and its line items from session cache to force fresh fetch
+                if (instance.getLineItems() != null) {
+                    for (BillLineItem item : instance.getLineItems()) {
+                        session.evict(item);
+                    }
+                }
+                session.evict(instance);
+                
+                // Now fetch fresh from database (will bypass cache since we evicted it)
+                IBillService billService = Context.getService(IBillService.class);
+                Bill originalBill = billService.getByUuid(instance.getUuid(), false);
+                
+                if (originalBill != null && originalBill.getLineItems() != null) {
+                    // Compare line items using equals() method in BillLineItem
+                    // Use Set comparison to ignore order - only check if same items exist
+                    Set<BillLineItem> originalSet = new HashSet<>(originalBill.getLineItems());
+                    Set<BillLineItem> incomingSet = new HashSet<>((lineItems != null) ? lineItems : new ArrayList<>());
+                    
+                    // Check if sets contain the same items (ignoring order)
+                    if (!originalSet.equals(incomingSet)) {
+                        throw new IllegalStateException(
+                                "Line items can only be modified when the bill is in PENDING state. Current status: "
+                                        + instance.getStatus());
+                    }
+                    
+                    if (originalBill.getLineItems() != null) {
+                        for (BillLineItem item : originalBill.getLineItems()) {
+                            session.evict(item);
+                        }
+                    }
+                    session.evict(originalBill);
+                }
+            }
         }
+        
         if (instance.getLineItems() == null) {
-            instance.setLineItems(new ArrayList<BillLineItem>(lineItems.size()));
+            int size = (lineItems != null) ? lineItems.size() : 0;
+            instance.setLineItems(new ArrayList<BillLineItem>(size));
         }
         BaseRestDataResource.syncCollection(instance.getLineItems(), lineItems);
         for (BillLineItem item : instance.getLineItems()) {
